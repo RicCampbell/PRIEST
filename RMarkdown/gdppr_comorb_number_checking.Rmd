@@ -1,0 +1,42 @@
+---
+title: "gdppr_comorb_number_checking"
+author: "Ric Campbell"
+date: "2021-04-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(tinytex)
+library(knitr)
+library(kableExtra)
+
+## Read in data
+
+ demo_file_id <- "FILE0115974_2021-03-18-163613"
+ gdppr_comorb_data <- readRDS(file = paste("D:/PRIESTDM/data/datasets/cohort", demo_file_id, "gdppr_comorb_records.rds", sep = "_"))
+
+
+```
+
+```{r create table, include = FALSE}
+
+## Number of patients in entire marked up GDPPR dataset
+  
+  number_of_patients <- gdppr_comorb_data[, uniqueN(patient_id)]
+  
+
+## Table for percents of each comorb
+  
+  comorb_count_and_percentages <- gdppr_comorb_data[comorb_present == TRUE, .(count = uniqueN(patient_id)), by = final_comorb_group][, percentage := round((count/number_of_patients)*100, digits = 2)]
+
+```
+
+## Counts and percentages of commorbidities for the entire marked up GDPPR dataset
+
+```{r table, echo = FALSE}
+  kable_styling(kable(comorb_count_and_percentages, format = "html"))
+```
+
