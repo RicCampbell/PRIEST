@@ -1,0 +1,101 @@
+---
+title: "NHS Digital Data Tracing Numbers"
+author: "Ric Campbell"
+date: "2020-11-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(tinytex)
+library(knitr)
+library(kableExtra)
+library(googlesheets4)
+
+## Read in all data from NHS Digital
+
+demographic <- fread("D:/source_data/nhs_digital/demo/FILE0113951_NIC377644_Demographics__APPROVED_47886_01010001_0.txt")
+
+
+## Read in data that we sent to NHS Digital to check what was traced and what was not traced
+
+nhs_digital_cohort <- fread("D:/source_data/identifiers/NIC-377644-X9J4P_TS.csv")
+
+setnames(nhs_digital_cohort, "UNIQUE REFERENCE", "UNIQUE_REFERENCE")
+
+
+## Reduce cols of demo data to those that we asked for
+
+demo_reduced <- copy(demographic[, .(Study_ID, NHS_NO, GENDER, POSTCODE, DOB)])
+nhs_digital_cohort <- nhs_digital_cohort[, .(UNIQUE_REFERENCE, NHS_NO, FAMILY_NAME, GIVEN_NAME, GENDER, DATE_OF_BIRTH, POSTCODE)]
+
+
+## Change col names so when merged they are different
+
+nhs_digital_cohort_cols_new <- paste(colnames(nhs_digital_cohort), "DIGITAL", sep = "_")
+setnames(nhs_digital_cohort, colnames(nhs_digital_cohort), nhs_digital_cohort_cols_new)
+
+demo_reduced_col_new <- paste(colnames(demo_reduced), "DEMO", sep = "_")
+setnames(demo_reduced, colnames(demo_reduced), demo_reduced_col_new)
+
+
+### Replace all blanks in both datasets with NA to allow comparison
+
+  ## NHS Digital cohort
+
+  nhs_digital_cohort_col_names <- colnames(nhs_digital_cohort)
+  nhs_digital_empty_count <- nhs_digital_cohort[POSTCODE_DIGITAL == "", .N]
+
+  nhs_digital_cohort[, (nhs_digital_cohort_col_names) := lapply(.SD, function(x) replace(x, x == "", NA)), .SDcols = nhs_digital_cohort_col_names]
+
+  stopifnot(nhs_digital_empty_count == nhs_digital_cohort[is.na(POSTCODE_DIGITAL), .N])
+
+
+  ## Demographics
+
+  demo_reduced_colname <- colnames(demo_reduced)
+  demo_empty_count <- demo_reduced[POSTCODE_DEMO == "", .N]
+
+  demo_reduced[, (demo_reduced_colname) := lapply(.SD, function(x) replace(x, x == "", NA)), .SDcols = demo_reduced_colname]
+
+  stopifnot(demo_empty_count == demo_reduced[is.na(POSTCODE_DEMO), .N])
+
+
+## Change format of date of birth to match
+
+demo_reduced[, date_of_birth := substr(DOB_DEMO, 1, 9)]
+demo_reduced[, date_of_birth := as.Date(date_of_birth, format = "%d%b%Y")]
+
+nhs_digital_cohort[, date_of_birth := as.Date(as.character(DATE_OF_BIRTH_DIGITAL), format = "%Y%m%d")]
+
+
+## Merge the two datasets on unique reference/study ID to see what has/hasn't been traced
+
+merged_traced_demo <- merge(nhs_digital_cohort, demo_reduced[, .(Study_ID_DEMO, NHS_NO_DEMO)], by.x = "UNIQUE_REFERENCE_DIGITAL", by.y = "Study_ID_DEMO", all.x = TRUE)
+
+
+
+## Everything in by condition
+traced_table <- merged_traced_demo[, .(.N, traced = sum(!is.na(NHS_NO_DEMO)), `traced_percentage (%)` = sum(!is.na(NHS_NO_DEMO)) / .N * 100),
+                   by = .(nhs_number_present = !is.na(NHS_NO_DIGITAL), 
+                          dob_present = !is.na(DATE_OF_BIRTH_DIGITAL), 
+                          gender_present = !is.na(GENDER_DIGITAL),
+                          first_name_present = !is.na(GIVEN_NAME_DIGITAL), 
+                          surname_present = !is.na(FAMILY_NAME_DIGITAL),
+                          postcode_present = !is.na(POSTCODE_DIGITAL))][order(-N)]
+
+kableExtra::kable_styling(knitr::kable(traced_table, digits = 1, format.args = list(big.mark = ',')))
+
+```
+
+
+## Number of records traced by NHS Digital for Pre-Hospital Priest Cohort by data provided
+
+
+```{r, echo = FALSE}
+
+kable(traced_table, digits = 2)
+```
+
