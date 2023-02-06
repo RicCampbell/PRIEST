@@ -1,0 +1,100 @@
+---
+title: "yas_source_checking"
+author: "Ric Campbell"
+date: "19/11/2020"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(readxl)
+```
+
+```{r, include = FALSE}
+
+
+## Read in YAS data
+
+  nonepr_cad <- data.table(readRDS("D:/source_data/yas/cad/card36_df_final.rds"))
+  epr_cad <- data.table(readRDS("D:/source_data/yas/epr/epr_cad_cases_final.rds"))
+  epr <- data.table(readRDS("D:/source_data/yas/epr/epr_final_df.rds"))
+  nhs111 <- data.table(readRDS("D:/source_data/yas/nhs111/111_post_optout_final.rds"))
+
+
+  stopifnot(all(colnames(epr_cad) %in% colnames(nonepr_cad)))
+  stopifnot(all(colnames(nonepr_cad) %in% colnames(epr_cad)))
+
+  stopifnot(!any(!(colnames(nonepr_cad) %in% colnames(epr_cad))))
+  stopifnot(!any(!(colnames(epr_cad) %in% colnames(nonepr_cad))))
+
+  stopifnot(all(epr_cad$callnumber %in% epr$callnumber))
+  stopifnot(!any(!(epr_cad$callnumber %in% epr$callnumber)))
+
+
+## Read in meta data
+
+  epr_provided_spec <- read_excel("D:/reference_data/YAS metadata for PRIEST - 2020-07-24.xlsx",
+                              sheet = "ePR data",
+                              col_names = TRUE,
+                              col_types = "text",
+                              trim_ws = TRUE)
+
+  cad_provided_spec <- read_excel("D:/reference_data/YAS metadata for PRIEST - 2020-07-24.xlsx",
+                                  sheet = "CAD data",
+                                  col_names = TRUE,
+                                  col_types = "text",
+                                  trim_ws = TRUE)
+
+  nhs111_provided_spec <- read_excel("D:/reference_data/YAS metadata for PRIEST - 2020-07-24.xlsx",
+                                  sheet = "NHS111",
+                                  col_names = TRUE,
+                                  col_types = "text",
+                                  trim_ws = TRUE)
+
+
+## Get YAS fields names from variable name col (removes one row from ePR as this is a comment and not a column)
+
+  epr_meta_fields <- epr_provided_spec$`variable name (as supplied)`[!(epr_provided_spec$`variable name (as supplied)` %in% "Is destination datetime available in ePR data (since this is a patient-resource level item)?")]
+
+  cad_meta_fields <- cad_provided_spec$`variable name (as supplied)`
+
+  nhs111_meta_fields <- nhs111_provided_spec$`variable name (as supplied)`
+
+  
+## Get YAS col names from provided data
+
+  nonepr_cad_cols <- colnames(nonepr_cad)
+  epr_cad_cols <- colnames(epr_cad)
+  epr_cols <- colnames(epr)
+  nhs111_cols <- colnames(nhs111)
+
+
+## Find any missing or extra fields provided in data compared with meta-data spreadsheet provided
+
+  missing_nonepr_cad_cols <- cad_meta_fields[!cad_meta_fields %in% nonepr_cad_cols]
+  extra_nonepr_cad_cols <- nonepr_cad_cols[!nonepr_cad_cols %in% cad_meta_fields]
+
+  missing_eprcad_cols <- cad_meta_fields[!cad_meta_fields %in% epr_cad_cols]
+  extra_prcad_cols <- epr_cad_cols[!epr_cad_cols %in% cad_meta_fields]
+
+  missing_epr_cols <- epr_meta_fields[!epr_meta_fields %in% epr_cols]
+  extra_epr_cols <- epr_cols[!epr_cols %in% epr_meta_fields]
+
+  missing_nhs111_cols <- nhs111_meta_fields[!nhs111_meta_fields %in% nhs111_cols]
+  extra_nhs111_cols <- nhs111_cols[!nhs111_cols %in% nhs111_meta_fields]
+```
+
+
+## Summary of any missing or extra columns that have been received from YAS for Pre-Hospital PRIEST
+
+
+  Missing Non-ePR-CAD columns: `r length(missing_nonepr_cad_cols)`  
+  Extra Non-ePR-CAD columns: `r length(extra_nonepr_cad_cols)`  
+  Missing ePR-CAD columns: `r length(missing_eprcad_cols)`  
+  Extra ePR-CAD columns: `r length(extra_prcad_cols)`  
+  Missing ePR columns: `r length(missing_epr_cols)`  
+  Extra ePR columns: `r length(extra_epr_cols)`  
+  Missing NHS 111 columns: `r length(missing_nhs111_cols)`  
+  Extra NHS 111 columns: `r length(extra_nhs111_cols)`  
