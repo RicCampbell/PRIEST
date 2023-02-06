@@ -1,0 +1,925 @@
+---
+title: "Routine Vs Primary Outcomes"
+author: "Ric Campbell"
+date: "13/09/2021"
+output: html_document
+---
+
+```{r setup_nope, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+###~~~~ May have to reset this chunk to 'setup' but this means it will run every time you run anything! ~~~~####
+
+###~~~~ Has to be run as a chunk to make setting of working directory work for using function for outcome data ~~~~~###
+
+library(data.table)
+library(kableExtra)
+library(googlesheets4)
+source("D:/PRIESTDM/R/outcome_functions.R")
+
+##knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+setwd(dir = "D:/PRIESTDM")
+
+## ID for demographics file used as single source of truth for attaching patient_ids on datasets
+
+  demo_file_id <- "FILE0115974_2021-03-18-163613"
+
+  
+## Read in cleaned core priest data
+  
+  core_priest_data <- readRDS(paste0("data/datasets/cohort_", demo_file_id, " 2021-09-13-163056_cleaned_core_priest_data_ssot_dr_outcomes.rds"))
+  
+  
+## Read in Trust info (code-name lookup)
+  
+  trust_data <- readRDS("D:/reference_data/trust_data.rds")
+  
+## Read in google sheet saved to reference data folder for lookup from site name
+  
+  site_trust_names <- fread("D:/reference_data/core-PRIEST ED sites - sites (live).csv",
+                            colClasses = "character")
+  
+  setnames(site_trust_names, tolower(make.names(colnames(site_trust_names), unique = TRUE)))
+  
+  site_trust_names[, study.code := as.integer(study.code)]
+  
+  site_trust_names <- unique(site_trust_names[, .(study.code, trust)])
+  
+
+## Get outcome data, merge in, and add in trust name as well
+  
+  core_priest_outcome_data <- getOutcomesData(cohort = core_priest_data,
+                                              demo_file_id = demo_file_id,
+                                              field_name_patient_id = "patient_id",
+                                              field_name_date_field = "attendance_date",
+                                              field_name_contact_id = "record_ID",
+                                              duration_days = 365L)
+
+  core_priest_data_linked <- merge(core_priest_data,
+                                   core_priest_outcome_data,
+                                   all.x = TRUE,
+                                   by = "record_ID")
+  
+  
+  core_priest_data_linked <- merge(core_priest_data_linked,
+                                   site_trust_names[, .(study.code, trust)],
+                                   all.x = TRUE,
+                                   by.x = "site_code",
+                                   by.y = "study.code")
+
+  setnames(core_priest_data_linked, "trust", "trust_name")
+```
+
+
+```{r, echo=FALSE}
+
+  ## Create list that want to use as factors for various splits of data
+
+  site_list <- c("1", "2", "3", "4", "5", "7", "8", "9", "10", "11", "12", "13", "15", "16", "17", "18", "19", "21", "22", "23", "24", "25","27", "28",
+                 "30", "31", "33", "34", "36", "37", "40", "41", "42", "44", "45", "46", "47", "48", "49", "50", "52", "53", "55", "57", "58", "59",
+                 "60", "61", "62", "63", "64", "65", "66", NA)
+
+  trust_list <- c("SHEFFIELD TEACHING HOSPITALS NHS FOUNDATION TRUST",
+                  "SHEFFIELD CHILDREN'S NHS FOUNDATION TRUST",
+                  "SALFORD ROYAL NHS FOUNDATION TRUST",
+                  "YORK AND SCARBOROUGH TEACHING HOSPITALS NHS FOUNDATION TRUST",
+                  "BARTS HEALTH NHS TRUST",
+                  "HULL UNIVERSITY TEACHING HOSPITALS NHS TRUST",
+                  "UNIVERSITY HOSPITALS BRISTOL AND WESTON NHS FOUNDATION TRUST",
+                  "UNIVERSITY HOSPITALS PLYMOUTH NHS TRUST",
+                  "MILTON KEYNES UNIVERSITY HOSPITAL NHS FOUNDATION TRUST",
+                  "ROYAL BERKSHIRE NHS FOUNDATION TRUST",
+                  "DORSET COUNTY HOSPITAL NHS FOUNDATION TRUST",
+                  "GLOUCESTERSHIRE HOSPITALS NHS FOUNDATION TRUST",
+                  "THE ROYAL WOLVERHAMPTON NHS TRUST",
+                  "THE SHREWSBURY AND TELFORD HOSPITAL NHS TRUST",
+                  "NORTHUMBRIA HEALTHCARE NHS FOUNDATION TRUST",
+                  "UNIVERSITY HOSPITALS OF NORTH MIDLANDS NHS TRUST",
+                  "MID AND SOUTH ESSEX NHS FOUNDATION TRUST",
+                  "OXFORD UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+                  "HARROGATE AND DISTRICT NHS FOUNDATION TRUST",
+                  "THE NEWCASTLE UPON TYNE HOSPITALS NHS FOUNDATION TRUST",
+                  "MANCHESTER UNIVERSITY NHS FOUNDATION TRUST",
+                  "LIVERPOOL UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+                  "CAMBRIDGE UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+                  "NOTTINGHAM UNIVERSITY HOSPITALS NHS TRUST",
+                  "FRIMLEY HEALTH NHS FOUNDATION TRUST",
+                  "THE QUEEN ELIZABETH HOSPITAL, KING'S LYNN, NHS FOUNDATION TRUST",
+                  "GREAT WESTERN HOSPITALS NHS FOUNDATION TRUST",
+                  "KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST",
+                  "ASHFORD AND ST PETER'S HOSPITALS NHS FOUNDATION TRUST",
+                  "LANCASHIRE TEACHING HOSPITALS NHS FOUNDATION TRUST",
+                  "EPSOM AND ST HELIER UNIVERSITY HOSPITALS NHS TRUST",
+                  "NORTH TEES AND HARTLEPOOL NHS FOUNDATION TRUST",
+                  "GUY'S AND ST THOMAS' NHS FOUNDATION TRUST",
+                  "BARNSLEY HOSPITAL NHS FOUNDATION TRUST",
+                  "COUNTY DURHAM AND DARLINGTON NHS FOUNDATION TRUST",
+                  "LEEDS TEACHING HOSPITALS NHS TRUST",
+                  "ST GEORGE'S UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+                  "SOUTH TEES HOSPITALS NHS FOUNDATION TRUST",
+                  "SHERWOOD FOREST HOSPITALS NHS FOUNDATION TRUST",
+                  "BOLTON NHS FOUNDATION TRUST",
+                  "EAST LANCASHIRE HOSPITALS NHS TRUST",
+                  "EAST SUSSEX HEALTHCARE NHS TRUST",
+                  "THE ROYAL BOURNEMOUTH AND CHRISTCHURCH HOSPITALS NHS FOUNDATION TRUST",
+                  "SURREY AND SUSSEX HEALTHCARE NHS TRUST",
+                  "LEWISHAM AND GREENWICH NHS TRUST",
+                  "ALDER HEY CHILDREN'S NHS FOUNDATION TRUST",
+                  "STOCKPORT NHS FOUNDATION TRUST", NA)
+  
+  age_cuts <- c(0, 18, 30, seq(50, 80, 10), Inf)
+  
+  setorder(core_priest_data_linked, ssot_calculated_age)
+  
+  age_list <- unique(cut(core_priest_data_linked$ssot_calculated_age, age_cuts, include.lowest = TRUE))
+  
+  ethnicity_list <- c("White",
+                      "Asian or Asian British",
+                      "Black or Black British",
+                      "Mixed",
+                      "Other Ethnic Groups",
+                      NA)
+  
+  sex_list <- c("1", "2", NA)
+  
+  deprivation_list <- c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", NA)
+
+
+
+```
+
+
+```{r, echo=FALSE}
+
+  colourTableFunction <- function(x) {
+      
+      length <- length(x)
+      z <- as.numeric(x[2:length])
+      
+      number_bins <- min(length, 4, na.rm = TRUE)
+      
+      y <- cut(z, breaks = unique(quantile(z, probs = (0:min)/min)), labels = FALSE)
+      cell_spec(x, color = spec_color(y, end = 0.9))
+  }
+
+```
+
+
+```{r functions, include=FALSE}
+
+## Table function
+
+createCountTable <- function(table, core_field, routine_field) {
+  
+  # table <- core_priest_data_linked
+  # core_field <- "core_age_groups"
+  # routine_field <- "routine_age_groups"
+  
+  table_copy <- copy(table)
+  
+  setnames(table_copy, c(core_field, routine_field),
+           c("._core_field_.", "._routine_field_."))
+  
+  summed_table <- table_copy[, .N, by = .(._core_field_., ._routine_field_.)]
+  
+
+## Need to mask number below 8, and round to the nearest 5
+  
+  summed_table[, N := round(N/5) * 5]
+  summed_table[, N := as.character(N)][N == "5", N := "*"]
+  
+  output_table_count <- dcast(summed_table,
+                        ._core_field_. ~ ._routine_field_.,
+                        fill = 0L,
+                        drop = FALSE,
+                        value.var = "N")[order(._core_field_.)]
+  
+  
+  ## Arrange cols same as rows, using ncol incase row/col has na and other does not
+  
+  setcolorder(output_table_count, head(c("._core_field_.", as.character(output_table_count$._core_field_.)), ncol(output_table_count)))
+
+  setnames(output_table_count, "._core_field_.", "Core")
+  
+  number_fields <- length(output_table_count)
+  
+  add_header_above(kable_styling(kable(output_table_count), bootstrap_options = c("striped", "hoover", "condensed")), 
+                   c(" ", "Routine" = number_fields - 1L))
+  
+}    
+
+  
+createPercentTable <- function(table, core_field, routine_field) {
+  
+  table_copy <- copy(table)
+  
+  setnames(table_copy, c(core_field, routine_field),
+           c("._core_field_.", "._routine_field_."))
+  
+  summed_table <- table_copy[, .N, by = .(._core_field_., ._routine_field_.)]
+  
+  summed_table[, N := round(N/5) * 5]
+  
+  total_records <- sum(summed_table$N)
+  
+  summed_table[, percent := round((N/total_records)*100, digits = 1)]
+  
+  summed_table[, percent := as.character(percent)][N == 5, percent := "*"][, N := NULL]
+  
+  output_table_percent <- dcast(summed_table,
+                                ._core_field_. ~ ._routine_field_.,
+                                fill = 0L,
+                                drop = FALSE,
+                                value.var = "percent")[order(._core_field_.)]
+  
+  setcolorder(output_table_percent, head(c("._core_field_.", as.character(output_table_percent$._core_field_.)), ncol(output_table_percent)))
+  
+  setnames(output_table_percent, "._core_field_.", "Core (%)")
+  
+  number_fields <- length(output_table_percent)
+  
+  add_header_above(kable_styling(kable(output_table_percent), bootstrap_options = c("striped", "hoover", "condensed")),
+                   c(" ", "Routine (%)" = number_fields - 1L))
+}
+
+
+
+createComorbComparisonTable <- function(table, comparison_field, comparison_field_list) {
+  
+## Need to mask numbers, round numbers, and create percentage based on rounded numbers
+  
+  # table <- comorb_comparators
+  # comparison_field <- "site_code"
+  # comparison_field_list <- site_list
+  
+## Need to mask numbers, round numbers, and create percentage based on rounded numbers
+  
+  table_copy <- copy(table)
+  
+  table_copy[, total_patients := TRUE]
+  
+  logic_fields <- colnames(table_copy)[!colnames(table_copy) %in% c("site_code", "trust_name", "routine_age_groups", "ssot_gender", "ssot_ethnicity_group",
+                                                                    "ssot_iod19_decile")]
+  
+  setnames(table_copy, comparison_field, "._comparison_field_.")
+  
+  
+  comorb_comparison_melt <- melt(table_copy,
+                               measure.vars = logic_fields,
+                               variable.name = "comorb",
+                               value.name = "value")
+  
+  
+  comorb_comparison_melt[, value := as.character(value)]
+  
+
+   if (class(comorb_comparison_melt$._comparison_field_.) != "factor") {
+    comorb_comparison_melt$._comparison_field_. <- factor(comorb_comparison_melt$._comparison_field_., levels = comparison_field_list)
+  }
+  
+  
+  ## Age groups already being a factor messes this up!!
+  comorb_comparison_counts_with_na <- cube(comorb_comparison_melt[!is.na(value), .N,
+                                                                  by = .(._comparison_field_. = factor(._comparison_field_.),
+                                                                                                
+                                                                         comorb = factor(comorb, 
+                                                                                         levels = c("total_patients",
+                                                                                                    "mortality_match", "smoker_match",
+                                                                                                    "pregnant_match", "hypertension_match",
+                                                                                                    "malignancy_match", "diabetes_match",
+                                                                                                    "renal_impairment_match", "obesity_match",
+                                                                                                    "cardiovascular_match", 
+                                                                                                    "immunosuppression_match",
+                                                                                                    "chronic_respiratory_match", NA)),
+                                                                         value = factor(value,
+                                                                                        levels = c("TRUE", "FALSE", NA)))],
+                                           .(sum(N)), by = c("._comparison_field_.", "comorb", "value"))
+  
+  comorb_comparison_counts_with_na <- comorb_comparison_counts_with_na[!is.na(._comparison_field_.) & (value == "TRUE" | (is.na(value)))]
+  
+  setnames(comorb_comparison_counts_with_na, "V1", "total")
+  
+  setorder(comorb_comparison_counts_with_na, ._comparison_field_., comorb, total)
+  
+  comorb_comparison_counts_with_na <- comorb_comparison_counts_with_na[!is.na(comorb)]
+  
+  comorb_comparison_counts_with_na[, comparison_field_total := max(total), by = ._comparison_field_.]
+  
+  comorb_non_na_counts <- comorb_comparison_counts_with_na[is.na(value)]
+  
+  setnames(comorb_non_na_counts, "total", "non_na_total")
+  
+  comorb_comparison_counts_with_na <- merge(comorb_comparison_counts_with_na,
+                                         comorb_non_na_counts[, .(._comparison_field_., comorb, non_na_total)],
+                                         by = c("._comparison_field_.", "comorb"),
+                                         all.x = TRUE)
+  
+  ## Find number of NA records per comorb per ._comparison_field_.
+  
+  comorb_comparison_counts_with_na[, number_na_records := comparison_field_total - non_na_total]
+  
+  
+  ## Create table values - 
+
+  comorb_comparison_counts_with_na[comorb == "total_patients", comorb := paste0(comparison_field, "_total")]
+  comorb_comparison_counts_with_na[is.na(value), comorb := paste0(comorb, "_non_null")]
+    
+  # comorb_comparison_counts_with_na[!is.na(value), table_value := paste0(total, " (", round((total/non_na_total)*100, digits = 1), "%)")]
+  # comorb_comparison_counts_with_na[is.na(value), table_value := paste0(total, " (", round((number_na_records/comparison_field_total)*100, digits = 1), "%)")]
+  
+  comorb_comparison_counts_with_na[!is.na(value), table_value := round((total/non_na_total)*100, digits = 1)]
+  comorb_comparison_counts_with_na[is.na(value), table_value := round((number_na_records/comparison_field_total)*100, digits = 1)]
+  
+  comorb_comparison_counts_with_na[comorb == paste0(comparison_field, "_total"), table_value := comparison_field_total]
+  
+  comorb_comparison_counts_no_na <- comorb_comparison_counts_with_na[!is.na(value)]
+  
+  comorbs_cast_table <- dcast(comorb_comparison_counts_no_na,
+                            comorb ~ ._comparison_field_.,
+                            fill = 0L,
+                            drop = TRUE,
+                            value.var = "table_value")
+  
+  comorbs_cast_table[, comorb := as.character(comorb)]
+
+  comorbs_cast_table <- rbind(comorbs_cast_table[comorb == paste0(comparison_field, "_total")], comorbs_cast_table[comorb != paste0(comparison_field, "_total")])
+
+  
+  # comorbs_cast_table[, row_sum := rowSums(comorbs_cast_table[, !"comorb"])]
+
+  # comorbs_cast_table <- t(apply(comorbs_cast_table[row_sum != 0,][, !"row_sum"], 1, colourTableFunction))
+  
+  kable_styling(kable(comorbs_cast_table, escape = FALSE), bootstrap_options = c("striped", "hoover", "condensed"), fixed_thead = TRUE)
+  
+}
+
+```
+
+## Fields that are present in the core Priest dataset and those that are present in the routine Priest dataset
+
+Unless stated, all core data was entered into the trial database (Prospect) by each site. Data was extracted from clinical records (paper or electronic) for the presenting attendance, or the Priest infection form was used as a clinical records form. Additional data could have been acquired by asking the attending clinician or from clinical staff asking the patient. If necessary information from previous admissions may have also been used.
+
+Unless stated, all fields in the routine dataset were derived from the primary care dataset stated in the table from records in the year preceding a patients admissions. GDPPR SNOMED codes that are included in each outcome or comorbidity can be found (reference_data/snomed_code_final_comorb_group_reference_file, on VM).
+
+
+```{r, echo=FALSE}
+
+core_routine_field_table <- data.table(outcome_or_comorbidity =
+                                         c("Primary outcome - mortality",
+                                           "Secondary outcome - organ support",
+                                           "Tobacco user",
+                                           "Pregnant",
+                                           "Hypertension",
+                                           "Active malignancy",
+                                           "Diabetes",
+                                           "Renal impairment",
+                                           "Obesity",
+                                           "Heart disease",
+                                           "Immunosuppression",
+                                           "Chronic lung disease",
+                                           "Steriod therapy",
+                                           "Asthma",
+                                           "Vape user",
+                                           "Known contact with Covid-19 case",
+                                           "Frailty",
+                                           "Stroke",
+                                           "Deprivation"),
+                                       core_time_span_definition =
+                                         c("Assesed at follow up, ~30 day from baseline",
+                                           "Organ support for either respiratory, cardio, and renal",
+                                           "Current tobacco user",
+                                           "Currently pregnant",
+                                           "Any diagnosis of hypertension recorded on medical record (regardless if treated, not including high BP during assessment)",
+                                           "Diagnosed or treated or untreatable within last 6 months (including recurrent or metastatic)",
+                                           "Type 1 or 2 recorded in medical records",
+                                           "Chronic kidney disease in medical records or previous blood results (eFGR <60ml/1.73m2 x2 90 days apart)",
+                                           "Obese in medical records, or BMI > 30",
+                                           "Previous or current heart disease requiring treatment or follow-up (coronary heart disease, congenital heart disease, cardiomyopathy, heart failure, arrhythmia, pacemaker, or other implanted device",
+                                           "Any reduction of the immune system due to drugs (excluding steriods), or disease affecting immune system",
+                                           "COPD, emphysema, pulmonary fibrosis, bronchiectasis, cystic fibrosis or oher chronic lung disease recorded in medical records", "prednisolone, hydercortisone, fludrocortisone, or cortisone",
+                                           "Diagnosis in medical records",
+                                           "Current vape user",
+                                           "Patient has had known contact with Covid-19 suspected or diagnosed covid case",
+                                           NA, NA, NA),
+                                       core_form =
+                                         c("Follow-up, mortality status",
+                                           "Follow-up, admission and support",
+                                           "Infection form, lifestyle",
+                                           "Infection form, lifestyle",
+                                           "Infection for, medical history",
+                                           "Infection form, medical history",
+                                           "Infecton form, medical history",
+                                           "Infecton form, medical history",
+                                           "Infection form, lifestyle",
+                                           "Infecton form, medical history",
+                                           "Infecton form, medical history",
+                                           "Infecton form, medical history",
+                                           "Infecton form, medical history",
+                                           "Infecton form, medical history",
+                                           "Infection form, lifestyle",
+                                           "Infection form, lifestyle",
+                                           NA, NA, NA),
+                                       routine_time_span =
+                                         c("Within 30 days from admission (admission = 0, death < 30)",
+                                           "Within 30 days from admission (admission = 0, organ support < 30)",
+                                           "Current or ex tobacco user recorded in last year",
+                                           "Pregnancy recorded in last 9 months",
+                                           "Hypertension recorded in previous year, includes drugs (blood pressure), 'hypertension resolved', 'benign..'",
+                                           "Record within previous year, disorders, procedures, situation - 'Personal history of primary malignant neoplasm of lung'",
+                                           "Recorded in previous year, type 1 or 2",
+                                           "Recorded in previous year, disorder, procedure, finding",
+                                           "Recorded in previous year, (BMI >30)",
+                                           "Recorded in previous year, lots of names 216 codes, didn't see pacemaker",
+                                           "Diease within previous year, drugs within previous month, I believe this does includes steroids, e.g. prednisolone",
+                                           "Respiratiry disease recorded in previous year, includes asthma (and inhalers), bronchiectasis, emphysema, pulmonary fibrosis...",
+                                           NA, NA, NA, NA,
+                                           "Most recent record/score in previous year",
+                                           "Recorded in previous year",
+                                           "Postcode provided (NHS Digital)"),
+                                       routine_dataset =
+                                         c("Death register",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           "GDPPR SNOMED codes",
+                                           NA, NA, NA, NA,
+                                           "GDPPR SNOEMED codes",
+                                           "GDPPR SNOEMED codes",
+                                           "Primary care registration system"))
+
+
+kable_styling(kable(core_routine_field_table), bootstrap_options = c("striped", "hoover", "condensed"))
+
+```
+
+
+All tables below follow the similar pattern of;  
+ - first table is absolute counts comparison of data from core PREIST (primary data) Vs pre-hospital PRIEST (routine data)  
+ - percentages of the same counts  
+   
+_N.B All number have been rounded to the nearest 5 and number under 8 removed due to disclosure control_
+
+
+## Sex
+
+```{r, echo=FALSE}
+
+  createCountTable(core_priest_data_linked, "core_priest_sex", "ssot_gender")
+
+  createPercentTable(core_priest_data_linked, "core_priest_sex", "ssot_gender")
+
+```
+
+
+## Ethnicity
+
+Core Priest had 18 different categories for ethnicity.
+Pre-hostpial Priest had 5 groups and 17 descriptions.
+These have been mapped onto the 5 groups in the table below.
+
+```{r, echo=FALSE}
+
+## Map ethnicity so can reduce to just main 5 categories
+## Should move this to D05 and re-save data
+
+  ethnicity_mapping <- data.table(read_excel("D:/reference_data/Field Mapping and Standardisation.xlsx",
+                                             sheet = "ethnicity_standardisation",
+                                             col_names = TRUE,
+                                             col_types = "text",
+                                             trim_ws = TRUE))
+  
+  core_priest_data_linked[, core_priest_ethnicity_reduced := ethnicity_mapping$ethnicity_group [match(core_priest_ethnicity, ethnicity_mapping$core_priest_ethnicity)]]
+  core_priest_data_linked[!(core_priest_ethnicity_reduced %in% ethnicity_mapping$ethnicity_group ), core_priest_ethnicity_reduced := NA]
+
+  createCountTable(core_priest_data_linked, "core_priest_ethnicity_reduced", "ssot_ethnicity_group")
+  
+  createPercentTable(core_priest_data_linked, "core_priest_ethnicity_reduced", "ssot_ethnicity_group")
+  
+
+
+```
+
+
+## Age
+There are [X] participants aged 0  
+
+The pattern in the table below is due to the fact that NHS Digitals linking algorithm requires a correct date of birth to be matched.
+
+```{r, echo=FALSE}
+
+## Create bins for both core and routine ages
+
+  core_priest_data_linked[, core_age_groups := cut(core_priest_calculated_age, age_cuts, include.lowest = TRUE, right = FALSE)]
+
+  core_priest_data_linked[, routine_age_groups := cut(ssot_calculated_age, age_cuts, include.lowest = TRUE, right = FALSE)]
+  
+  createCountTable(core_priest_data_linked, "core_age_groups", "routine_age_groups")
+  
+  createPercentTable(core_priest_data_linked, "core_age_groups", "routine_age_groups")
+
+
+```
+
+
+## Mortality
+Core Priest mortality was taken from the follow-up form that was meant to be completed 30 days after the patient admission. Notes from the follow-up form guidance state that this should be filled in "as early as possible" - _is that just admin based?_
+
+Pre-hospital Priest record mortality within 30 (and 7) days of admission. Date of admission was classed as day 0 and outcome < 30.
+
+
+```{r, echo=FALSE}
+
+  core_priest_data_linked[mortality_status %in% c("Alive", "Dead"), mortality_status_died := (mortality_status == "Dead")]
+
+  createCountTable(core_priest_data_linked, "mortality_status_died", "dr_death_within_30_days_contact")
+  
+  createPercentTable(core_priest_data_linked, "mortality_status_died", "dr_death_within_30_days_contact")
+  
+```
+
+## Admission to ICU/organ support
+### Secondary outcome  
+Patients aged under 18 have been removed before calculating table.
+
+Pre-hospital Priest record organ support within 30 (and 7) days of admission. Date of admission was classed as day 0 and outcome < 30.
+
+```{r echo=FALSE}
+
+  core_priest_data_linked[, any_support := as.logical(any_support)]
+
+  ## Remove under 18s from comparision of crit care
+
+  linked_no_under_18 <- core_priest_data_linked[core_priest_calculated_age > 18 | ssot_calculated_age > 18]
+
+  createCountTable(linked_no_under_18, "any_support", "crit_care_cc_within_30_days_contact")
+  
+  createPercentTable(linked_no_under_18, "any_support", "crit_care_cc_within_30_days_contact")
+
+
+```
+
+## Smoker
+N.B - The GDPPR dataset does not include SNOMED codes relating to vaping, and therefore no records for vaping were in the data we received
+Core-PRIEST also distinguished between smoking and vaping  
+Pre-hospital priest also classed ex-smoker codes as being a smoker, core priest form states 'tabacco user'.
+
+```{r, echo=FALSE}
+  
+  createCountTable(core_priest_data_linked, "tobacco_user", "gdppr_comorb_present_smoker")
+
+  createPercentTable(core_priest_data_linked, "tobacco_user", "gdppr_comorb_present_smoker")
+```
+
+
+## Pregnant
+Record for pregnancy for pre-hospital priest (now) is attendance date and 6 months prior.  
+
+```{r, echo=FALSE}
+  
+  createCountTable(core_priest_data_linked, "pregnant", "gdppr_comorb_present_pregnancy")
+
+  createPercentTable(core_priest_data_linked, "pregnant", "gdppr_comorb_present_pregnancy")
+```
+
+
+## Hypertension
+
+Core Priest form guidance states - "Any diagnosis of hypertension recorded on medical record (regardless if treated, not including high BP during assessment)"
+```{r, echo=FALSE}
+
+  createCountTable(core_priest_data_linked, "hypertension", "gdppr_comorb_present_hypertension")
+
+  createPercentTable(core_priest_data_linked, "hypertension", "gdppr_comorb_present_hypertension")
+```
+
+
+## Active malignancy
+
+Core Priest form guidance states - "Diagnosed or treated or un-treatable within last 6 months (including recurrent or metastatic)"
+
+```{r, echo=FALSE}
+
+  createCountTable(core_priest_data_linked, "active_malignancy", "gdppr_comorb_present_malignancy")
+
+  createPercentTable(core_priest_data_linked, "active_malignancy", "gdppr_comorb_present_malignancy")
+```
+
+
+## Diabetes
+
+Core Priest form guidance states - "Type 1 or 2 recorded in medical records"
+                                           
+```{r, echo=FALSE}
+
+  createCountTable(core_priest_data_linked, "diabetes", "gdppr_comorb_present_diabetes")
+
+  createPercentTable(core_priest_data_linked, "diabetes", "gdppr_comorb_present_diabetes")
+```
+
+
+## Renal impairment
+
+Core Priest form guidance states - "Chronic kidney disease in medical records or previous blood results (eFGR <60ml/1.73m2 x2 90 days apart)"
+                                           
+
+```{r, echo=FALSE}
+
+  createCountTable(core_priest_data_linked, "renal_impairment", "gdppr_comorb_present_renal_impairment")
+
+  createPercentTable(core_priest_data_linked, "renal_impairment", "gdppr_comorb_present_renal_impairment")
+```
+
+
+## Obesity
+
+Core Priest form guidance states - "Obese in medical records, or BMI > 30"
+                                          
+```{r, echo=FALSE}
+
+  createCountTable(core_priest_data_linked, "clinically_obese", "gdppr_comorb_present_obesity")
+
+  createPercentTable(core_priest_data_linked, "clinically_obese", "gdppr_comorb_present_obesity")
+```
+
+
+## Cardiovascular/heart disease
+
+Core Priest form guidance states -  "Previous or current heart disease requiring treatment or follow-up (coronary heart disease, congenital heart disease, cardiomyopathy, heart failure, arrhythmia, pacemaker, or other implanted device"
+                                          
+```{r, echo=FALSE}
+## Need to check that these fields are equivalent between datasets
+
+  createCountTable(core_priest_data_linked, "heart_disease", "gdppr_comorb_present_cardiovascular")
+
+  createPercentTable(core_priest_data_linked, "heart_disease", "gdppr_comorb_present_cardiovascular")
+```
+
+
+## Immunosuppression
+
+Core Priest form guidance states -  "Any reduction of the immune system due to drugs (excluding steriods), or disease affecting immune system"
+Pre-hospital Priest included steriods as an immunosupression drug   
+
+The first set of tables is a comparison of the fields 'immunosuppression' and 'gdppr_comorb_present_immunosuppression_combined'  
+The second set of tables the core Priest field is devired from 'immunosuppression' and 'steroid_therapy' fields 
+
+```{r, echo=FALSE}
+## Immmunosuppression  was split into two fields immunosupression and immunosuppression_meds, this was due to wanting to look at different time periods (30 and 365 days respectively), joined together they are the 'full' immunosuppression (might want to check this is the case)
+
+  core_priest_data_linked[, core_immunosuppresion_steriods := any(immunosuppression, steroid_therapy), by = record_ID]
+
+  createCountTable(core_priest_data_linked, "immunosuppression", "gdppr_comorb_present_immunosuppression_combined")
+
+  createPercentTable(core_priest_data_linked, "immunosuppression", "gdppr_comorb_present_immunosuppression_combined")
+  
+  
+  createCountTable(core_priest_data_linked, "core_immunosuppresion_steriods", "gdppr_comorb_present_immunosuppression_combined")
+
+  createPercentTable(core_priest_data_linked, "core_immunosuppresion_steriods", "gdppr_comorb_present_immunosuppression_combined")
+```
+
+
+## Chronic respiratory disease
+
+Core Priest form guidance states -  "COPD, emphysema, pulmonary fibrosis, bronchiectasis, cystic fibrosis or other chronic lung disease recorded in medical records"m this excludes asthma.
+
+Pre-hospital Priest included asthma as a chronic respiratory disease
+
+The first set of tables is a comparison of the fields 'other_chronic_lung_disease' and 'gdppr_comorb_present_chronic_respiratory_disease'  
+The second set of tables the core Priest field is devired from 'other_chronic_lung_disease' and 'asthma' fields  
+
+```{r, echo=FALSE}
+## Need to check that these fields are equivalent between datasets
+
+  core_priest_data_linked[, core_chronic_respiratory_disease := any(other_chronic_lung_disease, asthma), by = record_ID]
+
+  createCountTable(core_priest_data_linked, "other_chronic_lung_disease", "gdppr_comorb_present_chronic_respiratory_disease")
+
+  createPercentTable(core_priest_data_linked, "other_chronic_lung_disease", "gdppr_comorb_present_chronic_respiratory_disease")
+  
+  
+  createCountTable(core_priest_data_linked, "core_chronic_respiratory_disease", "gdppr_comorb_present_chronic_respiratory_disease")
+
+  createPercentTable(core_priest_data_linked, "core_chronic_respiratory_disease", "gdppr_comorb_present_chronic_respiratory_disease")
+```
+
+
+
+```{r, echo=FALSE}
+## Create field for if comorb matches between datasets (True/True OR False/False)
+  
+  core_priest_data_linked[, ':=' (mortality_match = mortality_status_died == dr_death_within_30_days_contact,
+                                  organ_support_match = any_support == crit_care_cc_within_30_days_contact,
+                                  smoker_match = tobacco_user == gdppr_comorb_present_smoker,
+                                  pregnant_match = pregnant == gdppr_comorb_present_pregnancy,
+                                  hypertension_match = hypertension == gdppr_comorb_present_hypertension,
+                                  malignancy_match = active_malignancy == gdppr_comorb_present_malignancy,
+                                  diabetes_match = diabetes == gdppr_comorb_present_diabetes,
+                                  renal_impairment_match = renal_impairment == gdppr_comorb_present_renal_impairment,
+                                  obesity_match = clinically_obese == gdppr_comorb_present_obesity,
+                                  cardiovascular_match = heart_disease == gdppr_comorb_present_cardiovascular,
+                                  immunosuppression_match = immunosuppression == gdppr_comorb_present_immunosuppression_combined,
+                                  chronic_respiratory_match = other_chronic_lung_disease == gdppr_comorb_present_chronic_respiratory_disease)]
+
+  
+  core_priest_data_linked[core_priest_calculated_age > 17 | ssot_calculated_age > 17, organ_support_match := NA]
+  
+
+  comorb_comparators <-core_priest_data_linked[, .(mortality_match, organ_support_match, smoker_match, pregnant_match, hypertension_match,
+                                                   malignancy_match, diabetes_match, renal_impairment_match, obesity_match,
+                                                   cardiovascular_match, immunosuppression_match, chronic_respiratory_match,
+                                                   trust_name, site_code, routine_age_groups, ssot_gender, ssot_ethnicity_group, ssot_iod19_decile)]
+
+```
+
+
+## Site comparisons
+
+Table that compares each comorbility for each site. A comorbility was said to 'match' if both routine and primary data were wither both TRUE, or both FALSE. Percentages are based on each comorbidity at each site.
+
+Site codes are direct from core-PREIST site_code field.
+
+```{r, echo=FALSE}
+
+  createComorbComparisonTable(comorb_comparators, "site_code", site_list)
+  
+```
+
+
+## Trust comparisons
+Table that compares each comorbility for each trust A comorbility was said to 'match' if both routine and primary data were wither both TRUE, or both FALSE. Percentages are based on each comorbidity for each trust.  
+  
+Trust names are taken from google spreadsheet with core-PRIEST site code/site name and trust name.  
+Linked via site_code.
+
+```{r, echo=FALSE}  
+
+  createComorbComparisonTable(comorb_comparators, "trust_name", trust_list)
+
+```
+ 
+
+## Age comparisons
+Table that compares each comorbility for age groups. A comorbility was said to 'match' if both routine and primary data were wither both TRUE, or both FALSE. Percentages are based on each comorbidity for each age group.
+
+```{r, echo=FALSE}
+
+  createComorbComparisonTable(comorb_comparators, "routine_age_groups", age_list)
+
+```
+
+
+## Ethnicity comparisons
+Table that compares each comorbility against ethnicity. A comorbility was said to 'match' if both routine and primary data were wither both TRUE, or both FALSE. Percentages are based on each comorbidity for each ethnicity.
+
+Ethnicity groupings have been taken from the routine dataset
+
+```{r, echo=FALSE}
+
+  createComorbComparisonTable(comorb_comparators, "ssot_ethnicity_group", ethnicity_list)
+
+```
+
+
+## Sex comparison
+
+Table that compares each comorbility for sex. A comorbility was said to 'match' if both routine and primary data were wither both TRUE, or both FALSE. Percentages are based on each comorbidity for each sex.  
+  
+Sex was taken from the routine dataset
+
+```{r, echo = FALSE}
+
+  createComorbComparisonTable(comorb_comparators, "ssot_gender", sex_list)
+
+```
+
+
+## Deprivation comparison
+Table that compares each comorbility for deprivation decile. A comorbility was said to 'match' if both routine and primary data were wither both TRUE, or both FALSE. Percentages are based on each comorbidity for each deprivation decile.  
+  
+Deprivation decile was taken from the routine dataset.
+
+
+```{r, echo=FALSE}
+
+  createComorbComparisonTable(comorb_comparators, "ssot_iod19_decile", deprivation_list)
+
+```
+
+
+
+``` {r, echo = FALSE}
+## Thought I needed this list of trusts, but might not, but don't want to get rid of just yet
+
+## Trust names taken from linkage in D05 from most common ODS code from ECDS data
+
+# "MANCHESTER UNIVERSITY NHS FOUNDATION TRUST",
+# "BARTS HEALTH NHS TRUST",
+# "UNIVERSITY HOSPITALS BRISTOL AND WESTON,
+# NHS FOUNDATION TRUST",
+# "MID AND SOUTH ESSEX NHS FOUNDATION TRUST",
+# "DORSET COUNTY HOSPITAL NHS FOUNDATION TRUST",
+# "ALDER HEY CHILDREN'S NHS FOUNDATION TRUST",
+# "YORK AND SCARBOROUGH TEACHING HOSPITALS NHS FOUNDATION TRUST",
+# "HARROGATE AND DISTRICT NHS FOUNDATION TRUST",
+# "SHEFFIELD CHILDREN'S NHS FOUNDATION TRUST",
+# "THE QUEEN ELIZABETH HOSPITAL, KING'S LYNN, NHS FOUNDATION TRUST",
+# "MILTON KEYNES UNIVERSITY HOSPITAL NHS FOUNDATION TRUST",
+# "FRIMLEY HEALTH NHS FOUNDATION TRUST",
+# "THE ROYAL BOURNEMOUTH AND CHRISTCHURCH HOSPITALS NHS FOUNDATION TRUST",
+# "LIVERPOOL UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+# "BARNSLEY HOSPITAL NHS FOUNDATION TRUST",
+# "CAMBRIDGE UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+# "SHEFFIELD TEACHING HOSPITALS NHS FOUNDATION TRUST",
+# "ROYAL BERKSHIRE NHS FOUNDATION TRUST",
+# "GUY'S AND ST THOMAS' NHS FOUNDATION TRUST",
+# "LEWISHAM AND GREENWICH NHS TRUST",
+# "ST GEORGE'S UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+# "UNIVERSITY HOSPITALS OF NORTH MIDLANDS NHS TRUST",
+# "KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST",
+# "SHERWOOD FOREST HOSPITALS NHS FOUNDATION TRUST",
+# "UNIVERSITY HOSPITALS PLYMOUTH NHS TRUST",
+# "THE ROYAL WOLVERHAMPTON NHS TRUST",
+# "SALFORD ROYAL NHS FOUNDATION TRUST",
+# "BOLTON NHS FOUNDATION TRUST",
+# "GREAT WESTERN HOSPITALS NHS FOUNDATION TRUST",
+# "LEEDS TEACHING HOSPITALS NHS TRUST",
+# "THE NEWCASTLE UPON TYNE HOSPITALS NHS FOUNDATION TRUST",
+# "GLOUCESTERSHIRE HOSPITALS NHS FOUNDATION TRUST",
+# "NORTHUMBRIA HEALTHCARE NHS FOUNDATION TRUST",
+# "OXFORD UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+# "ASHFORD AND ST PETER'S HOSPITALS NHS FOUNDATION TRUST",
+# "SURREY AND SUSSEX HEALTHCARE NHS TRUST",
+# "SOUTH TEES HOSPITALS NHS FOUNDATION TRUST",
+# "EPSOM AND ST HELIER UNIVERSITY HOSPITALS NHS TRUST",
+# "NORTH TEES AND HARTLEPOOL NHS FOUNDATION TRUST",
+# "HULL UNIVERSITY TEACHING HOSPITALS NHS TRUST",
+# "STOCKPORT NHS FOUNDATION TRUST",
+# "NOTTINGHAM UNIVERSITY HOSPITALS NHS TRUST",
+# "EAST SUSSEX HEALTHCARE NHS TRUST",
+# "LANCASHIRE TEACHING HOSPITALS NHS FOUNDATION TRUST",
+# "COUNTY DURHAM AND DARLINGTON NHS FOUNDATION TRUST",
+# "EAST LANCASHIRE HOSPITALS NHS TRUST",
+# "THE SHREWSBURY AND TELFORD HOSPITAL NHS TRUST"
+
+
+## Trust names taken from google sheet of core priest site code/site name to trust name
+# "SHEFFIELD TEACHING HOSPITALS NHS FOUNDATION TRUST",
+# "SHEFFIELD CHILDREN'S NHS FOUNDATION TRUST",
+# "SALFORD ROYAL NHS FOUNDATION TRUST"
+# "YORK AND SCARBOROUGH TEACHING HOSPITALS NHS FOUNDATION TRUST",
+# "BARTS HEALTH NHS TRUST",
+# "HULL UNIVERSITY TEACHING HOSPITALS NHS TRUST",
+# "UNIVERSITY HOSPITALS BRISTOL AND WESTON NHS FOUNDATION TRUST",
+# "UNIVERSITY HOSPITALS PLYMOUTH NHS TRUST",
+# "MILTON KEYNES UNIVERSITY HOSPITAL NHS FOUNDATION TRUST",
+# "ROYAL BERKSHIRE NHS FOUNDATION TRUST",
+# "DORSET COUNTY HOSPITAL NHS FOUNDATION TRUST",
+# "GLOUCESTERSHIRE HOSPITALS NHS FOUNDATION TRUST",
+# "THE ROYAL WOLVERHAMPTON NHS TRUST",
+# "THE SHREWSBURY AND TELFORD HOSPITAL NHS TRUST",
+# "NORTHUMBRIA HEALTHCARE NHS FOUNDATION TRUST",
+# "UNIVERSITY HOSPITALS OF NORTH MIDLANDS NHS TRUST",
+# "MID AND SOUTH ESSEX NHS FOUNDATION TRUST",
+# "OXFORD UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+# "HARROGATE AND DISTRICT NHS FOUNDATION TRUST",
+# "THE NEWCASTLE UPON TYNE HOSPITALS NHS FOUNDATION TRUST",
+# "MANCHESTER UNIVERSITY NHS FOUNDATION TRUST",
+# "LIVERPOOL UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+# "CAMBRIDGE UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+# "NOTTINGHAM UNIVERSITY HOSPITALS NHS TRUST",
+# "FRIMLEY HEALTH NHS FOUNDATION TRUST",
+# "THE QUEEN ELIZABETH HOSPITAL, KING'S LYNN, NHS FOUNDATION TRUST",
+# "GREAT WESTERN HOSPITALS NHS FOUNDATION TRUST",
+# "KING'S COLLEGE HOSPITAL NHS FOUNDATION TRUST",
+# "ASHFORD AND ST PETER'S HOSPITALS NHS FOUNDATION TRUST",
+# "LANCASHIRE TEACHING HOSPITALS NHS FOUNDATION TRUST",
+# "EPSOM AND ST HELIER UNIVERSITY HOSPITALS NHS TRUST",
+# "NORTH TEES AND HARTLEPOOL NHS FOUNDATION TRUST",
+# "GUY'S AND ST THOMAS' NHS FOUNDATION TRUST",
+# "BARNSLEY HOSPITAL NHS FOUNDATION TRUST",
+# "COUNTY DURHAM AND DARLINGTON NHS FOUNDATION TRUST",
+# "LEEDS TEACHING HOSPITALS NHS TRUST",
+# "ST GEORGE'S UNIVERSITY HOSPITALS NHS FOUNDATION TRUST",
+# "SOUTH TEES HOSPITALS NHS FOUNDATION TRUST",
+# "SHERWOOD FOREST HOSPITALS NHS FOUNDATION TRUST",
+# "BOLTON NHS FOUNDATION TRUST",
+# "EAST LANCASHIRE HOSPITALS NHS TRUST",
+# "EAST SUSSEX HEALTHCARE NHS TRUST",
+# "THE ROYAL BOURNEMOUTH AND CHRISTCHURCH HOSPITALS NHS FOUNDATION TRUST",
+# "SURREY AND SUSSEX HEALTHCARE NHS TRUST",
+# "LEWISHAM AND GREENWICH NHS TRUST",
+# "ALDER HEY CHILDREN'S NHS FOUNDATION TRUST",
+# "STOCKPORT NHS FOUNDATION TRUST",
+
+
+```
+
+
