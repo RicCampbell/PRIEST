@@ -1,0 +1,238 @@
+---
+title: "numbers_for_111_strobe_diagram"
+author: "Ric Campbell"
+date: "19/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(readxl)
+library(lubridate)
+library(tinytex)
+library(knitr)
+library(kableExtra)
+
+
+## Add in functions that will be used as can not source like in normal scripts (could if function scripts were packages)
+
+fn_validateNHSNumber <- function(NHSnumber_in) {
+
+  expand_nhsno <- data.table(nhsno = NHSnumber_in)
+
+  # remove non-numeric characters
+  expand_nhsno[, nhsno := gsub("[^0-9]+", "", NHSnumber_in)]
+
+  # Set NHS number of invalid length or dummy value to NA
+  expand_nhsno[nchar(nhsno) != 10L | nhsno == "2333455667", nhsno := NA]
+
+  # Split NHS number into characters
+  expand_nhsno[, paste0("dig", 1:10) := tstrsplit(nhsno, "", fixed = TRUE)]
+
+  # convert digits to to integers
+  col_names <- paste0("dig", 1:10)
+  expand_nhsno[, (col_names) := lapply(.SD, as.integer), .SDcols = col_names]
+
+  # calculate checksum
+  expand_nhsno[, checksum := 11L - (10L * dig1 + 9L * dig2 + 8L * dig3 + 7L * dig4 + 6L * dig5 + 5L * dig6 + 4L * dig7 + 3L * dig8 + 2L * dig9) %% 11L]
+  expand_nhsno[checksum == 11L, checksum := 0L]
+
+  # compare checksum (this accounts for case when checksum 10 [as a single digit cannot be 10!])
+  expand_nhsno[dig10 != checksum, nhsno := NA]
+
+  # Check for other invalid formats: 1st and last equal all else 0 OR all equal
+  expand_nhsno[(dig1 == dig10 &
+                  dig2 == 0 &
+                  dig3 == 0 &
+                  dig4 == 0 &
+                  dig5 == 0 &
+                  dig6 == 0 &
+                  dig7 == 0 &
+                  dig8 == 0 &
+                  dig9 == 0) |
+                 (dig1 == dig2 &
+                    dig1 == dig3 &
+                    dig1 == dig4 &
+                    dig1 == dig5 &
+                    dig1 == dig6 &
+                    dig1 == dig7 &
+                    dig1 == dig8 &
+                    dig1 == dig9 &
+                    dig1 == dig10), nhsno := NA]
+
+  return(expand_nhsno[, nhsno])
+}
+
+
+removeExcludedPatient <- function(final_cohort) {
+
+  ## Read in file with removed patients due to death register conflicts
+
+    excluded_patients <- readRDS(file = paste("D:/PRIESTDM/data/datasets/cohort", demo_file_id, "excluded_patient_ids.rds", sep = "_"))
+
+
+  ## Remove excluded patients
+
+    final_cohort_excluded_removed <- final_cohort[!(patient_id %in% excluded_patients)]
+
+    return(final_cohort_excluded_removed)
+}
+
+```
+
+```{r, echo = FALSE}
+## Read in NHS 111 data from source (raw data, contains identifiers)
+
+  nhs111 <- data.table(readRDS("D:/source_data/yas/nhs111/111_post_optout_final.rds"))
+
+
+## Change col names from original to our standardised ones, read in mapping first
+
+  nhs111_provided_mapping <- data.table(read_excel("D:/reference_data/Field Mapping and Standardisation.xlsx",
+                                                   sheet = "NHS111",
+                                                   col_names = TRUE,
+                                                   col_types = "text",
+                                                   trim_ws = TRUE))
+
+  setnames(nhs111, make.names(colnames(nhs111), unique = TRUE))
+
+  setnames(nhs111, nhs111_provided_mapping$source_field, nhs111_provided_mapping$destination_field)
+  
+    
+## Create record_id, will match orginal ordering as record_id was applied to data in state it was read in
+
+  nhs111[, record_ID := as.integer(paste0("4", formatC(1:.N, width = nchar(nrow(nhs111)), format = "d", flag = "0")))]
+
+
+## Keep only those calls that occur in the time we are interested in (this should be all of them), change to just date so time element doesn't make <> look strange
+
+  nhs111[, call_date := as.Date(call_datetime)]
+
+  nhs111 <- nhs111[call_date >= "2020-03-18"]
+  nhs111 <- nhs111[call_date < "2020-06-30"]
+
+
+## Check for full duplicates
+
+  stopifnot(uniqueN(nhs111) == nhs111[, .N])
+
+
+## Check all NHS numbers are valid
+
+  nhs111[, valid_nhs_no := fn_validateNHSNumber(nhs_number)]
+  stopifnot(nhs111[valid_nhs_no == nhs_number, .N] == nhs111[, .N])
+
+
+## Take first number needed in strobe diagram
+
+  number_nhs111_calls_received <- nhs111[, .N]
+
+
+## Do linkage using record_id to patient_id - nhs111 record_ids start with '4'
+
+  ## Read in record look up file created during SSoT creation
+
+    demo_file_id <- "FILE0115974_2021-03-18-163613"
+    record_id_to_pt_id_lu <- readRDS(paste0("D:/PRIESTDM/data/linkage/cohort_", demo_file_id, "_record_id_to_pt_id_lu.rds"))
+
+
+  ## Merge nhs111 to add all possible patient_ids possible
+
+    nhs111_merged <- merge(nhs111,
+                           record_id_to_pt_id_lu,
+                           by = "record_ID",
+                           all.x = TRUE)
+
+
+## Get number of records that could/could not be traced or core-PRIEST withdrawn (B01 line 25)
+
+  nhs111_traced <- nhs111_merged[!is.na(patient_id)]
+
+  linkable_nhs111_calls <- nhs111_traced[, .N]
+
+  calls_not_possible_trace <- number_nhs111_calls_received - linkable_nhs111_calls
+
+
+## Remove excluded patients (double deaths, death before contact, birth after contact)
+
+  nhs111_exclulded_removed <- removeExcludedPatient(nhs111_traced)
+
+  linkable_not_excluded_calls <- nhs111_exclulded_removed[, .N]
+
+  excluded_calls <- linkable_nhs111_calls - linkable_not_excluded_calls
+
+
+## Reduce to patients, only one call each, need to get same order as cohort as will change if there was a triage dispostion
+
+  setorder(nhs111_exclulded_removed, patient_id, call_datetime, record_ID, na.last = TRUE)
+
+  nhs111_exclulded_removed[, patient_call_record_order := 1:.N, by = patient_id]
+
+
+## Get number for cohort of individual patients (first call from each patient)
+
+  nhs111_first_calls <- nhs111_exclulded_removed[patient_call_record_order == 1]
+
+  individual_patients <- nhs111_first_calls[, .N]
+
+  multiple_calls_records <- linkable_not_excluded_calls - individual_patients
+
+
+## Merge in SSoT to get dob to calculate age for each patient at incident date
+
+  demo_ssot <- readRDS(file = paste("D:/source_data/ssot/cohort", demo_file_id, "demo_ssot.rds", sep = "_"))
+
+  nhs111_first_calls_age <- merge(nhs111_first_calls,
+                                  demo_ssot[, .(patient_id, dob)],
+                                  by = "patient_id",
+                                  all.x = TRUE)
+
+
+  nhs111_first_calls_age[, calculated_age := as.period(interval(start = dob, end = call_date))$year]
+
+
+## Get numbers for adult cohort
+
+  adult_cohort <- nhs111_first_calls_age[calculated_age >= 16]
+
+  adult_cohort_count <- adult_cohort[, .N]
+
+  under_sixteen <- individual_patients - adult_cohort_count
+
+
+## Get numbers for those who had a final dispostion
+
+  adult_final_disposition <- adult_cohort[!is.na(final_dx_desc), .N]
+
+  no_disposition <- adult_cohort_count - adult_final_disposition
+  
+  
+  ## Create table will all numbers in
+
+  strobe_numbers_table <- data.table(variable_name = c("number_nhs111_calls_received", "calls_not_possible_trace",
+                                                       "linkable_nhs111_calls","multiple_or_excluded_calls_records",
+                                                       "individual_patients_excluded_removed", "under_sixteen",
+                                                       "adult_cohort_count", "no_disposition",
+                                                       "adult_final_disposition"),
+                                     count = c(number_nhs111_calls_received, calls_not_possible_trace,
+                                               linkable_nhs111_calls, (excluded_calls + multiple_calls_records),
+                                               individual_patients, under_sixteen,
+                                               adult_cohort_count, no_disposition,
+                                               adult_final_disposition))
+  
+  
+## Want to round to nearest 5 to work with disclosure control rules - don't have to do this
+  
+  # strobe_numbers_table[, rounded_count := (round(count/5))*5][, count := NULL]
+
+```
+
+Table with figures need for Pre-Hospital PRIEST NHS 111 STROBE diagram
+
+```{r strobe_figurs_table, echo = FALSE}
+
+kable(strobe_numbers_table)
+
+```
