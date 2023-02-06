@@ -1,0 +1,134 @@
+---
+title: "strobe_diagram_numbers_cad"
+author: "Ric Campbell"
+date: "17/08/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(data.table)
+library(readxl)
+library(lubridate)
+library(tinytex)
+library(knitr)
+library(kableExtra)
+
+## Add in functions that will be used as can not source like in normal scripts (could if function scripts were packages)
+
+  removeExcludedPatient <- function(final_cohort) {
+  
+    ## Read in file with removed patients due to death register conflicts
+  
+      excluded_patients <- readRDS(file = paste("D:/PRIESTDM/data/datasets/cohort", demo_file_id, "excluded_patient_ids.rds", sep = "_"))
+  
+  
+    ## Remove excluded patients
+  
+      final_cohort_excluded_removed <- final_cohort[!(patient_id %in% excluded_patients)]
+  
+      return(final_cohort_excluded_removed)
+  }
+
+```
+
+
+```{r create_numbers, echo = FALSE}
+
+## Read in raw data
+
+  epr_cad <- data.table(readRDS("D:/source_data/yas/epr/epr_cad_cases_final.rds"))
+  nonepr_cad <- data.table(readRDS("D:/source_data/yas/cad/card36_df_final.rds"))
+  
+  cad_data <- rbind(epr_cad, nonepr_cad)
+  
+## Keep incidents between dates of interest
+  
+  cad_data[, date_time_forperf := as.Date(date_time_forperf)]
+  
+  cad_data <- cad_data[date_time_forperf >= "2020-03-18"]
+  cad_data <- cad_data[date_time_forperf < "2020-06-30"]
+  
+## Only keep card36 and 999 calls
+  
+  cad_data <- cad_data[substr(despatchcode, 1, 2) == "36"]
+  
+  cad_data <- cad_data[sourceofcall == "999"]
+  
+  
+## Number of 999 calls is unique number of call numbers as was reduced to one record each originally
+  
+  number_of_999_calls_received <- uniqueN(cad_data[, callnumber])
+  
+  rm(cad_data)
+  
+  
+## Load in CAD data from end of B04 - linking was done with ePR as well, only records with no patient id were removed and saved
+## patient ids were attached after discrepanices were sorted
+  
+  demo_file_id <- "FILE0115974_2021-03-18-163613"
+  
+  cad_excluded_data <- readRDS(paste("data/datasets/cohort", demo_file_id, "cad_excluded_data.rds", sep = "_"))
+  cad_data <- readRDS(paste("data/datasets/cohort", demo_file_id, "cad_data_ssot_dr_outcomes.rds", sep = "_"))
+
+  cad_data <- cad_data[call_datetime >= "2020-03-18" & call_datetime < "2020-06-30"]
+  cad_excluded_data <- cad_excluded_data[call_datetime >= "2020-03-18" & call_datetime < "2020-06-30"]
+  
+  cad_data <- cad_data[substr(despatch_code, 1, 2) == "36"]
+  cad_data <- cad_data[course_of_call == "999"]
+  
+  cad_excluded_data <- cad_excluded_data[substr(despatch_code, 1, 2) == "36"]
+  cad_excluded_data <- cad_excluded_data[course_of_call == "999"]
+  
+  
+  stopifnot(number_of_999_calls_received - cad_excluded_data[, .N] == cad_data[, .N])
+  
+  stopifnot(cad_excluded_data[is.na(patient_id), .N] == cad_excluded_data[, .N])
+  stopifnot(cad_data[is.na(patient_id), .N] == 0)
+  
+  number_999_calls_not_linked <- cad_excluded_data[, .N]
+  
+  number_999_calls_linked <- cad_data[, .N]
+  
+  cad_exluded_patients_removed <- removeExcludedPatient(cad_data)
+  
+  number_excluded_patients <- number_999_calls_linked - cad_exluded_patients_removed[, .N]
+  
+  rm(list = setdiff(ls(), c("removeExcludedPatient", "number_of_999_calls_received", "number_999_calls_not_linked",
+                            "number_999_calls_linked", "number_excluded_patients")))
+  
+
+## Read in cohort that was sent to stats for final numbers
+  
+  cad_cohort <- fread("data/data_for_stats/cohort_2021-05-06_emergency_centre_contact.csv")
+  
+  number_multiple_calls_single_patient <- cad_cohort[patient_call_record_order != 1, .N]
+  
+  number_individual_patients <- cad_cohort[patient_call_record_order == 1, .N]
+
+  number_aged_under_sixteen <- cad_cohort[patient_call_record_order == 1][ssot_calculated_age < 16, .N]
+  
+  final_study_population <- cad_cohort[patient_call_record_order == 1 & ssot_calculated_age > 15, .N]
+  
+  
+## Create table with numbers in
+  
+  strobe_numbers_table <- data.table(variable_name = c("number_999_calls_to_yas", "calls_not_possible_to_trace",
+                                                       "linkable_999_calls_to_yas","multiple_or_excluded_calls_records",
+                                                       "individual_patients_excluded_removed", "under_sixteen",
+                                                       "adult_cohort_count"),
+                                     count = c(number_of_999_calls_received, number_999_calls_not_linked,
+                                               number_999_calls_linked, (number_excluded_patients + number_multiple_calls_single_patient),
+                                               number_individual_patients, number_aged_under_sixteen,
+                                               final_study_population))
+
+
+```
+
+Table with figures need for Pre-Hospital PRIEST Triage/ePR STROBE diagram
+
+```{r strobe_figurs_table, echo=FALSE}
+
+kable(strobe_numbers_table)
+
+```
