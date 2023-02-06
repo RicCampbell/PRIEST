@@ -1,0 +1,360 @@
+---
+title: "NHS Digital Data Checking"
+author: "Ric Campbell"
+date: "2021-01-27"
+output: html_document
+---
+
+## Internal UoS PRIEST team only, please do not share more widely
+
+```{r get google login access, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(tinytex)
+library(knitr)
+library(kableExtra)
+library(googlesheets4)
+library(googledrive)
+
+
+fn_covertStrToDate <- function(date_in, dt_format = "%Y-%m-%d") {
+  date_out <- as.Date(lubridate::fast_strptime(paste(date_in, "12:00:00"), format = paste(dt_format, "%H:%M:%S"), tz = "Europe/London", lt = FALSE))
+  date_out <- replace(date_out, date_out %in% as.Date("1900-01-01"), NA)
+  return(date_out)
+}
+
+fn_removeBlanks <- function(field) {
+  field <- trimws(field)
+  return(replace(field, field == "", NA))
+}
+
+
+## Give script permission to use auth token found in cache
+
+warning("You must have connected to your Google account proir to running this script as it uses the auth token found in the cache")
+# gs4_auth() - may need re-doing even if have not shut down RStudio
+# Then run markdown from console:
+# rmarkdown::render("RMarkdown/nhs_digital_data_checking_and_outputs.Rmd")
+
+options(gargle_oauth_email = TRUE)
+
+```
+
+```{r, echo = FALSE}
+
+## Read in all data from NHS Digital
+
+apc1 <- fread("D:/source_data/nhs_digital/apc/NIC377644_HES_APC_201999_APPROVED_51667_01010001_0.txt", colClasses = "character")
+apc2 <- fread("D:/source_data/nhs_digital/apc/NIC377644_HES_APC_202006_APPROVED_51668_01010001_0.txt", colClasses = "character")
+
+apc <- rbind(apc1, apc2)
+
+
+critical_care1 <- fread("D:/source_data/nhs_digital/cc/NIC377644_HES_CC_201999_APPROVED_51669_01010001_0.txt", colClasses = "character")
+critical_care2 <- fread("D:/source_data/nhs_digital/cc/NIC377644_HES_CC_202006_APPROVED_51670_01010001_0.txt", colClasses = "character")
+
+critical_care <- rbind(critical_care1, critical_care2)
+
+
+demographic <- fread("D:/source_data/nhs_digital/demo/FILE0115974_NIC377644_Demographics__APPROVED_53999_01010001_0.txt", colClasses = "character")
+
+death_reg <- fread("D:/source_data/nhs_digital/dr/FILE0115975_NIC377644_CIVREG_MORT__APPROVED_54000_01010001_0.txt", colClasses = "character")
+
+
+ecds1 <- fread("D:/source_data/nhs_digital/ecds/NIC377644_ECDS_201999_APPROVED_51664_01010001_0.txt", colClasses = "character")
+ecds2 <- fread("D:/source_data/nhs_digital/ecds/NIC377644_ECDS_202006_APPROVED_51665_01010001_0.txt", colClasses = "character")
+
+ecds <- rbind(ecds1, ecds2)
+
+gdppr <- fread("D:/source_data/nhs_digital/gdppr/NIC377644_GDPPR_20201204_APPROVED_51666_01010001_0.txt", colClasses = "character")
+
+
+rm(apc1, apc2, critical_care1, critical_care2, ecds1, ecds2)
+
+
+# Convert date fields to dates
+
+apc[, ADMIDATE := fn_covertStrToDate(ADMIDATE)]
+critical_care[, EPISTART := fn_covertStrToDate(EPISTART)]
+death_reg[, DATE_OF_DEATH := fn_covertStrToDate(REG_DATE_OF_DEATH, dt_format = "%Y%m%d")]
+death_reg[, REG_DATE_OF_DEATH := NULL]
+ecds[, ARRIVAL_DATE := fn_covertStrToDate(ARRIVAL_DATE)]
+gdppr[, DATE := fn_covertStrToDate(DATE)]
+
+
+## Read in col names that we asked for from Google Sheet
+
+nhs_digital_requested_data <- as.character(as_sheets_id("https://docs.google.com/spreadsheets/d/1ONAYEbbd_dfwqfy-D0jrOeP31pem-gFytsyojfwrp1o/edit#gid=1397121393"))
+
+
+## Read in sites sheet from google drive - correctly formatted field name has been done
+
+## Might have to put a delay in as too many read requests in short space of time?
+
+ suppressMessages(apc_requested <- data.table(range_read(nhs_digital_requested_data,
+                                       sheet = "APC", col_types = "c")))
+
+ suppressMessages(cc_requested <- data.table(range_read(nhs_digital_requested_data,
+                                        sheet = "CC", col_types = "c")))
+
+ suppressMessages(demo_requested <- data.table(range_read(nhs_digital_requested_data,
+                                        sheet = "DEMO", col_types = "c")))
+
+ suppressMessages(dr_requested <- data.table(range_read(nhs_digital_requested_data,
+                                        sheet = "DR", col_types = "c")))
+
+ suppressMessages(ecds_requested <- data.table(range_read(nhs_digital_requested_data,
+                                       sheet = "ECDS", col_types = "c")))
+ 
+ suppressMessages(gdppr_requested <- data.table(range_read(nhs_digital_requested_data,
+                                       sheet = "GDPPR", col_types = "c")))
+
+
+## Change all col names to upper case and take col names and change one to correct data dictionary label
+
+apc_colnames <- colnames(setnames(apc, colnames(apc), toupper(colnames(apc))))
+cc_colnames <- colnames(setnames(critical_care, colnames(critical_care), toupper(colnames(critical_care))))
+demo_colnames <- colnames(setnames(demographic, colnames(demographic), toupper(colnames(demographic))))
+dr_colnames <- colnames(setnames(death_reg, colnames(death_reg), toupper(colnames(death_reg))))
+ecds_colnames <- colnames(setnames(ecds, colnames(ecds), toupper(colnames(ecds))))
+gdppr_colnames <- colnames(setnames(gdppr, colnames(gdppr), toupper(colnames(gdppr))))
+
+setnames(apc, "PROVSPNOPS", "PROVSPNO")
+
+
+## Make changes to requested list to add entries that have multiple fields
+
+## APC - number of fields that should be present taken from data dictionary
+
+apc_requested_names <- c(apc_requested[field_name != "DEPDAYS_N" & field_name !="DIAG_4_NN" & field_name != "INTDAYS_N", field_name],
+                         paste0("DEPDAYS_", 1:9), paste0("DIAG_4_", formatC(1:20, width = 2, format = "d", flag = "0")), paste0("INTDAYS_", 1:9))
+
+
+## ECDS - number of fields that should be present created to match up with data provided
+## All fields have a group (or field) repeat of 1...* as found in the technical output specification (V3.0) available on NHS Digital website
+
+ecds_requested_names <- c(ecds_requested[field_name != "COMORBIDITIES" & field_name != "DIAGNOSIS_CODE" & field_name != "DIAGNOSIS_QUALIFIER"
+                                         & field_name != "INVESTIGATION_CODE" & field_name != "REFERRED_TO_SERVICE" & field_name != "SEQUENCE_NUMBER"
+                                         & field_name != "TREATMENT_CODE", field_name],
+                          paste0("COMORBIDITIES_", 1:10), paste0("DIAGNOSIS_CODE_", 1:12), paste0("DIAGNOSIS_QUALIFIER_", 1:12),
+                          paste0("INVESTIGATION_CODE_", 1:12), paste0("REFERRED_TO_SERVICE_", 1:4), paste0("SEQUENCE_NUMBER_", 1:12),
+                          paste0("TREATMENT_CODE_", 1:12))
+
+
+## Keep only the non-code cols names for gdppr 
+ 
+  gdppr_requested_names <- unique(gdppr_requested[, is_code_list := 
+                                             substr(field_name, nchar(field_name)-3, nchar(field_name)) == "_COD"][is_code_list == FALSE, field_name])
+
+
+## Check that we have received all the cols asked for, and if have received any more
+
+  missing_apc_cols <- apc_requested_names[!apc_requested_names %in% apc_colnames]
+  extra_apc_cols <- apc_colnames[!apc_colnames %in% apc_requested_names]
+  
+  missing_cc_cols <- cc_requested[!cc_requested[, toupper(field_name)] %in% cc_colnames][, toupper(field_name)]
+  extra_cc_cols <- cc_colnames[!cc_colnames %in% cc_requested[, toupper(field_name)]]
+  
+  missing_demo_cols <- demo_requested[!demo_requested[, field_name] %in% demo_colnames][, field_name]
+  extra_demo_cols <- demo_colnames[!demo_colnames %in% demo_requested[, field_name]]
+   
+  missing_dr_cols <- dr_requested[!dr_requested[, field_name] %in% dr_colnames][, field_name]
+  extra_dr_cols <- dr_colnames[!dr_colnames %in% dr_requested[, field_name]]
+  
+  missing_ecds_cols <- ecds_requested_names[!ecds_requested_names %in% ecds_colnames]
+  extra_ecds_cols <- ecds_colnames[!ecds_colnames %in% ecds_requested_names]
+  
+  missing_gdppr_cols <- gdppr_requested_names[!gdppr_requested_names %in% gdppr_colnames]
+  extra_gdppr_cols <- gdppr_colnames[!gdppr_colnames %in% gdppr_requested_names]
+
+
+
+## Look if any data is in the extra cols provided for either demographics or death register - first replace blanks with NA
+  
+  demographic[, (demo_colnames) := lapply(.SD, fn_removeBlanks), .SDcols = demo_colnames]
+  death_reg[, (dr_colnames) := lapply(.SD, fn_removeBlanks), .SDcols = dr_colnames]
+  
+
+  demo_non_na_count <- t(demographic[, lapply(.SD, function(x) sum(!is.na(x))), .SDcols = extra_demo_cols])
+
+  death_reg_non_na_count <- t(death_reg[, lapply(.SD, function(x) sum(!is.na(x))), .SDcols = extra_dr_cols])
+
+
+# ## Limit APC data to just the Study ids we have in demo dataset as demo is being used as out single source of truth
+# 
+#   demo_study_ids <- demographic[, STUDY_ID]
+# 
+#   apc_demo_only <- apc[STUDY_ID %in% demo_study_ids]
+
+
+## Find number of unique records, unique study_ids (or similar) for each dataset before building table
+
+# ### APC
+# 
+#   apc_records <- length(apc_demo_only[!is.na(EPIKEY), unique(EPIKEY)])
+#   apc_people_soft <- length(apc_demo_only[!is.na(ENCRYPTED_HESID), unique(ENCRYPTED_HESID)])
+#   apc_study_ids <- length(apc_demo_only[!is.na(STUDY_ID), unique(STUDY_ID)])
+
+  ## Numbers just for APC whiled do not have Demo dataset - still using as would involve doing the whole identifying here
+
+  apc_records <- length(apc[!is.na(EPIKEY), unique(EPIKEY)])
+  apc_people_soft <- length(apc[!is.na(ENCRYPTED_HESID), unique(ENCRYPTED_HESID)])
+  apc_study_ids <- length(apc[!is.na(STUDY_ID), unique(STUDY_ID)])
+
+
+### CC
+ ## Find all APC records that have a SUSRECID from CC, to find numbers for critical care
+
+  all_cc_susrecids <- critical_care[, unique(SUSRECID)]
+ 
+  # cc_apc_sub_cohort <- apc_demo_only[SUSRECID %in% all_cc_susrecids]
+   
+  cc_apc_sub_cohort <- apc[SUSRECID %in% all_cc_susrecids]
+
+ 
+ ## Check if have an APC record for every Critical Care record
+
+   stopifnot(length(setdiff(all_cc_susrecids, apc[, unique(SUSRECID)])) == 0)
+
+
+  ## How many do not have an APC record as have removed APC records not recorded in the demo dataset
+
+  #  cc_records_not_from_demo_trace <- length(setdiff(all_cc_susrecids, cc_apc_sub_cohort[, unique(SUSRECID)]))
+
+
+  # ## Find numbers for critical care
+  # 
+  #   cc_records <- length(all_cc_susrecids)
+  #   cc_people_soft <- length(cc_apc_sub_cohort[!is.na(ENCRYPTED_HESID), unique(ENCRYPTED_HESID)])
+  #   cc_study_ids <- length(cc_apc_sub_cohort[!is.na(STUDY_ID), unique(STUDY_ID)])
+
+  ## Numbers for CC while we don't have Demo dataset - keeping this as don't want to do all identifying of patient here
+
+     cc_records <- length(all_cc_susrecids)
+     cc_people_soft <- length(cc_apc_sub_cohort[!is.na(ENCRYPTED_HESID), unique(ENCRYPTED_HESID)])
+     cc_study_ids <- length(cc_apc_sub_cohort[!is.na(STUDY_ID), unique(STUDY_ID)])
+
+
+### Demographics
+
+ demo_records <- unique(demographic)[, .N]
+ demo_people_soft <- length(demographic[!is.na(NHS_NO), unique(NHS_NO)])
+ demo_study_ids_count <- length(demographic[!is.na(STUDY_ID), unique(STUDY_ID)])
+
+
+### Death register
+
+ death_records <- unique(death_reg)[, .N]
+ death_people_soft <- length(death_reg[!is.na(DEC_CONF_NHS_NUMBER), unique(DEC_CONF_NHS_NUMBER)])
+ death_study_ids <- length(death_reg[!is.na(STUDY_ID), unique(STUDY_ID)])
+    
+    
+### EDCS
+    
+  ecds_records <- unique(ecds)[, .N]
+  ecds_people_soft <- length(ecds[!is.na(NHS_NUMBER), unique(NHS_NUMBER)])
+    
+    
+### GDPPR
+    
+  gdppr_records <- unique(gdppr)[, .N]
+  gdppr_people_soft <- length(gdppr[!is.na(NHS_NUMBER), unique(NHS_NUMBER)])
+  gdppr_study_ids <- length(gdppr[!is.na(STUDY_ID), unique(STUDY_ID)])
+    
+
+## Create table with numbers of rows, distinct records, unique study_ids, min/max dates
+
+    dataset_numbers <- data.table(dataset = "APC", number_of_rows = apc[, .N], number_of_records = apc_records, 
+                                  rough_number_of_people = apc_people_soft, number_study_ids = apc_study_ids,
+                                  min_date = as.character(apc[!is.na(ADMIDATE), min(ADMIDATE)]),
+                                  max_date = as.character(apc[!is.na(ADMIDATE), max(ADMIDATE)]))
+    
+    dataset_numbers <- rbind(dataset_numbers, list("Critical Care", critical_care[, .N], cc_records, cc_people_soft, cc_study_ids,
+                                                   as.character(critical_care[!is.na(EPISTART), min(EPISTART)]),
+                                                   as.character(critical_care[!is.na(EPISTART), max(EPISTART)])))
+    
+    dataset_numbers <- rbind(dataset_numbers, list("Demographics", demographic[, .N],
+                                                   demo_records, demo_people_soft, demo_study_ids_count, NA, NA))
+                                                   
+     
+    dataset_numbers <- rbind(dataset_numbers, list("Death Register", death_reg[, .N],
+                                                   death_records, death_people_soft, death_study_ids,
+                                                   as.character(death_reg[!is.na(DATE_OF_DEATH), min(DATE_OF_DEATH)]),
+                                                   as.character(death_reg[!is.na(DATE_OF_DEATH), max(DATE_OF_DEATH)])))
+    
+    dataset_numbers <- rbind(dataset_numbers, list("ECDS", ecds[, .N], ecds_records, ecds_people_soft, NA,
+                                                   as.character(ecds[!is.na(ARRIVAL_DATE), min(ARRIVAL_DATE)]),
+                                                   as.character(ecds[!is.na(ARRIVAL_DATE), max(ARRIVAL_DATE)])))
+    
+    dataset_numbers <- rbind(dataset_numbers, list("GDPPR", gdppr[, .N], gdppr_records, gdppr_people_soft, gdppr_study_ids,
+                                                   as.character(gdppr[!is.na(DATE) & DATE > "1900-01-01", min(DATE)]),
+                                                   as.character(gdppr[!is.na(DATE), max(DATE)])))
+    
+```
+
+# Comparison of the coloumns that we asked for and we have received for NHS Digital datasets
+
+Missing APC columns: `r paste0(missing_apc_cols, collapse = " ")`  
+Extra APC columns: `r paste0(extra_apc_cols, collapse = " ")`  
+
+Missing Critical Care columns: `r paste0(missing_cc_cols, collapse = " ")`  
+Extra Critical Care columns: `r paste0(extra_cc_cols, collapse = " ")`
+
+Missing ECDS columns: `r paste0(missing_ecds_cols, collapse = " ")`  
+Extra ECDS columns: `r paste0(extra_ecds_cols, collapse = " ")`
+
+Number of missing columns in demographic dataset: `r length(missing_demo_cols)`
+Number of extra columns in demographic dataset: `r length(extra_demo_cols)`
+
+Number of missing columns in death register dataset: `r length(missing_demo_cols)`
+Number of extra columns in death register dataset: `r length(extra_demo_cols)`
+
+Missing GDPPR columns: `r paste0(missing_gdppr_cols, collapse = " ")`  
+Extra GDPPR columns: `r paste0(extra_gdppr_cols, collapse = " ")`\
+
+
+```{r, echo = FALSE}
+
+# paste0(c("Missing APC coloumns: ", missing_apc_cols), collapse = " ")
+# paste0(c("Extra APC coloumns: ", extra_apc_cols), collapse = " ")
+# 
+# paste0(c("Missing CC coloumns: ", missing_cc_cols), collapse = " ")
+# paste0(c("Extra CC coloumns: ", extra_cc_cols), collapse = " ")
+# 
+# paste0("Number of missing coloumns in demographic dataset: ", length(missing_demo_cols))
+# paste0("Number of extra coloumns in demographic dataset: ", length(extra_demo_cols))
+# 
+# paste0("Number of missing coloumns in death register dataset: ", length(missing_demo_cols))
+# paste0("Number of extra coloumns in death register dataset: ", length(extra_demo_cols))
+
+```
+
+# Table showing the the extra coloumns in demographic dataset, and the number of rows that are not blank
+
+```{r, echo = FALSE}
+kable_styling(kable(demo_non_na_count), full_width = FALSE)
+
+```
+
+# Table showing the the extra coloumns in death register dataset, and the number of rows that are not blank
+
+```{r, echo = FALSE}
+kable_styling(kable(death_reg_non_na_count), full_width = FALSE)
+
+```
+
+# Summary of the data received from NHS Digital
+
+```{r, echo = FALSE}
+kable_styling(kable(dataset_numbers, format = "html"))
+
+```
+
+<!-- # Number of Study IDs present in Critical Care dataset that are not found in demographic dataset -->
+
+```{r, echo = FALSE}
+#cc_records_not_from_demo_trace
+
+```
+
